@@ -1,0 +1,1 @@
+"""PPE inspection system package."""

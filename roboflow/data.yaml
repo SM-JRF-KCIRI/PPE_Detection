@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 6
+names: ['Boots', 'Gloves', 'Goggles', 'Helmet', 'Person', 'Vest']
+
+roboflow:
+  workspace: dataset-ppe
+  project: ppe-vest-helmet
+  version: 1
+  license: MIT
+  url: https://universe.roboflow.com/dataset-ppe/ppe-vest-helmet/dataset/1
