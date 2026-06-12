@@ -186,7 +186,7 @@ def run_training(args: argparse.Namespace) -> int:
     trained_path = "runs/ppe_train/v1/weights/best.pt"
     print("\n[train.py] Training complete.")
     print(f"[train.py] Best model saved to: {trained_path}")
-    print("[train.py] Now open ppe_system/config.py and set:")
+    print("[train.py] Now open config.py and set:")
     print(f"[train.py]   PPE_MODEL_PATH = '{trained_path}'")
 
     _save_training_report(args.project / args.name, class_counts, class_weights)

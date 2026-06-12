@@ -118,8 +118,8 @@ def _normalize_label(label: str) -> str:
     if normalized.endswith("s") and normalized not in {"glass", "dress"}:
         normalized = normalized[:-1]
     aliases = {
-        "boots": "boot",
-        "boot": "boot",
+        "boots": "shoe",
+        "boot": "shoe",
         "gloves": "glove",
         "glove": "glove",
         "hardhat": "helmet",
@@ -129,9 +129,7 @@ def _normalize_label(label: str) -> str:
         "hook": "hook",
         "vest": "vest",
         "helmet": "helmet",
-        "safety boots": "boot",
-        "workboot": "boot",
-        "boot": "boot",
+        "shoe": "shoe",
     }
     return aliases.get(normalized, normalized)
 
@@ -156,7 +154,7 @@ def _allowed_regions_for_label(label: str, regions: Dict[str, List[float]]):
         return [regions.get("left_hand"), regions.get("right_hand")]
     if label == "hook":
         return [regions.get("belt"), regions.get("chest")]
-    if label == "boot":
+    if label == "shoe":
         return [regions.get("foot")]
     return []
 
@@ -205,7 +203,7 @@ def evaluate_compliance(person_id: int, report: Dict) -> Dict:
         "vest": assigned["vest"],
         "glove": assigned["glove"],
         "hook": assigned["hook"],
-        "boot": assigned["boot"],
+        "shoe": assigned["shoe"],
         "status": status,
         "regions": regions,
         "assigned_ppe": assigned_ppe,

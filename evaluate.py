@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate a YOLOv8 PPE model and save summary metrics.")
     parser.add_argument("--data", type=Path, default=ROOT / "roboflow" / "data.yaml", help="Path to the dataset YAML file.")
-    parser.add_argument("--model", type=Path, default=ROOT / "ppe_system" / "best.pt", help="Path to the PPE model to evaluate.")
+    parser.add_argument("--model", type=Path, default=ROOT / "best" / "best.pt", help="Path to the PPE model to evaluate.")
     parser.add_argument("--imgsz", type=int, default=640, help="Input image size for validation.")
     parser.add_argument("--batch", type=int, default=16, help="Validation batch size.")
     parser.add_argument("--device", type=str, default=None, help="Device to run validation on (cpu or cuda).")

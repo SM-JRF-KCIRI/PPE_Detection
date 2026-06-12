@@ -12,7 +12,7 @@ save_period: -1
 cache: false
 device: cpu
 workers: 4
-project: D:\newppe\ppe_system\runs\ppe_train
+project: D:\newppe\PPE_Detection\runs\ppe_train
 name: v1
 exist_ok: true
 pretrained: true
@@ -107,4 +107,4 @@ auto_augment: randaugment
 erasing: 0.4
 cfg: null
 tracker: botsort.yaml
-save_dir: D:\newppe\ppe_system\runs\ppe_train\v1
+save_dir: D:\newppe\PPE_Detection\runs\ppe_train\v1

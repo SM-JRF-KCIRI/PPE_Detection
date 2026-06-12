@@ -1,64 +1,62 @@
 # PPE Inspection System
 
-A production-style PPE compliance inspection system built with Ultralytics YOLOv8, pose estimation, tracking, temporal smoothing, and a Gradio dashboard.
+## Overview
 
-## Features
+This repository contains a PPE compliance inspection workflow built around YOLOv8 pose detection, PPE object detection, tracking, region-based assignment, temporal smoothing, and a Gradio dashboard.
 
-- Person detection with YOLOv8-pose
-- PPE detection with YOLOv8m / custom `best.pt`
-- ByteTrack-style tracking for stable person IDs
-- Temporal smoothing over the last 5 frames
-- Region-based assignment for helmet, vest, gloves, and boots
-- Industrial-style Gradio dashboard with image/video/webcam/live camera support
+The application entry point is in `app.py`, with supporting logic under the main `PPE_Detection/` project folder and dataset assets under `roboflow/`.
 
-## Project Structure
+## What the project does
 
-```
-ppe_system/
-│
-├── app.py
-├── config.py
-├── detector.py
-├── pose.py
-├── tracker.py
-├── ppe_rules.py
-├── smoother.py
-├── utils.py
-├── requirements.txt
-└── README.md
-```
+- Detects people from video or image input using a YOLOv8 pose model.
+- Detects PPE items such as helmet, vest, gloves, hook, boots, and goggles.
+- Assigns PPE detections to the most likely person using body-region logic.
+- Evaluates compliance status per person and smooths results across frames.
+- Displays the inspection result in a Gradio interface for image, video, webcam, or live camera input.
 
-## Setup
+## Features visible in the code
 
-1. Create a Python 3.10+ virtual environment.
-2. Install dependencies:
+- Gradio dashboard with image / video / webcam / camera URL modes.
+- Optional `GRADIO_SERVER_PORT` environment variable for the launch port.
+- Training script for a YOLOv8 PPE model using `roboflow/data.yaml`.
+- Compliance reporting rows for the UI table output.
 
-```bash
-pip install -r ppe_system/requirements.txt
-```
-
-3. Place your custom PPE model at:
-
-- `D:/newppe/roboflow/best.pt`
-
-4. Optionally provide YOLOv8 model weights locally or allow Ultralytics to download them:
-
-- `yolov8-pose.pt`
-- `yolov8m.pt`
-
-## Run
+## Installation
 
 From the workspace root:
 
 ```bash
-cd d:\newppe\ppe_system
+python -m pip install -r requirements.txt
+```
+
+The legacy `ppe_system/` sources were moved into `legacy_ppe_system/` for archival reference; the active project now lives entirely under `PPE_Detection/`.
+
+## Usage
+
+### Run the dashboard
+
+```bash
+cd d:\newppe\PPE_Detection
 python app.py
 ```
 
-Then open the Gradio UI on the displayed port.
+### Train a PPE model
 
-## Notes
+```bash
+cd d:\newppe
+python train.py --data roboflow/data.yaml --epochs 100 --batch 16
+```
 
-- The tracker wrapper is designed to integrate with ByteTrack-style tracking and can be upgraded when `yolox` / `byte-track` packages are available.
-- The system uses pose keypoints to build body regions and evaluates PPE compliance per person.
-- The Gradio UI supports image upload, video upload, webcam stream, and live camera URL.
+The training flow is implemented in `train.py` and writes outputs under `runs/ppe_train/`.
+
+## Environment variables
+
+The current code uses one optional runtime environment variable:
+
+- `GRADIO_SERVER_PORT` — override the default Gradio launch port (`7860`).
+
+No other environment variables are referenced in the checked-in code.
+
+## Folder reference
+
+See [details.md](details.md) for the full folder and file breakdown.

@@ -134,21 +134,27 @@ def extract_body_regions(person_box: List[float], keypoints: Optional[np.ndarray
 
 
 def _normalize_label(label: str) -> str:
-    normalized = label.strip().lower()
+    normalized = str(label).strip().lower().replace("_", " ").replace("-", " ")
     if normalized.endswith("s") and normalized not in {"glass", "dress"}:
         normalized = normalized[:-1]
     aliases = {
         "hardhat": "helmet",
         "safety helmet": "helmet",
         "safetyhelmet": "helmet",
+        "safety helmet": "helmet",
         "safety vest": "vest",
         "safetyvest": "vest",
         "hi vis": "vest",
         "hi-vis": "vest",
-        "workboot": "shoe",
-        "boot": "shoe",
-        "boots": "shoe",
+        "workboot": "boot",
+        "work boots": "boot",
+        "shoe": "boot",
+        "shoes": "boot",
         "gloves": "glove",
+        "goggle": "goggle",
+        "goggles": "goggle",
+        "safety goggles": "goggle",
+        "safety_goggles": "goggle",
         "hook": "hook",
         "safety hook": "hook",
         "person": "person",
@@ -165,27 +171,41 @@ def _region_contains_center(ppe_box: List[float], region: Region) -> bool:
     return region[0] <= center[0] <= region[2] and region[1] <= center[1] <= region[3]
 
 
-def _region_overlaps_box(ppe_box: List[float], region: Region) -> bool:
+def _region_distance(ppe_box: List[float], region: Region) -> float:
+    center = center_of_box(ppe_box)
     if region is None:
-        return False
+        return float("inf")
+    if isinstance(region[0], tuple):
+        region_box = _polygon_to_box(region)
+    else:
+        region_box = list(region)
+    rx1, ry1, rx2, ry2 = region_box
+    rx = (rx1 + rx2) / 2.0
+    ry = (ry1 + ry2) / 2.0
+    return float(np.hypot(center[0] - rx, center[1] - ry))
+
+
+def _region_overlaps_box(ppe_box: List[float], region: Region) -> float:
+    if region is None:
+        return 0.0
     if isinstance(region[0], tuple):
         region = _polygon_to_box(region)
-    return compute_iou(ppe_box, region) > 0.0
+    return compute_iou(ppe_box, region)
 
 
-def _allowed_regions(label: str, regions: Dict[str, Region]) -> List[Region]:
+def _allowed_regions(label: str, regions: Dict[str, Region]) -> List[Tuple[str, Region]]:
     if label == "helmet":
-        return [regions.get("head")]
+        return [("head", regions.get("head"))]
     if label == "vest":
-        return [regions.get("chest")]
+        return [("chest", regions.get("chest"))]
     if label == "glove":
-        return [regions.get("left_hand"), regions.get("right_hand")]
+        return [("left_hand", regions.get("left_hand")), ("right_hand", regions.get("right_hand"))]
     if label == "hook":
-        return [regions.get("belt"), regions.get("chest")]
-    if label == "shoe":
-        return [regions.get("leg"), regions.get("foot")]
-    if label == "goggles":
-        return [regions.get("head")]
+        return [("belt", regions.get("belt")), ("chest", regions.get("chest"))]
+    if label == "boot":
+        return [("leg", regions.get("leg")), ("foot", regions.get("foot"))]
+    if label in {"goggle", "goggles"}:
+        return [("head", regions.get("head"))]
     return []
 
 
@@ -194,34 +214,48 @@ def assign_ppe_to_person(person_reports: List[Dict], detections: List[Dict]) -> 
         report["assigned_ppe"] = []
 
     for detection in detections:
-        normalized_label = detection.get("normalized_name", "")
+        normalized_label = _normalize_label(detection.get("normalized_name", detection.get("label", "")))
         if normalized_label not in PPE_CLASS_LABELS:
             continue
 
         ppe_center = center_of_box(detection["bbox"])
         best_person = None
-        best_distance = float("inf")
+        best_region = None
+        best_score = float("inf")
 
         for report in person_reports:
             regions = report.get("regions", {})
-            for region in _allowed_regions(normalized_label, regions):
+            for region_name, region in _allowed_regions(normalized_label, regions):
                 if region is None:
                     continue
-                if normalized_label == "vest":
-                    if not _region_overlaps_box(detection["bbox"], region):
-                        continue
-                else:
-                    if not _region_contains_center(detection["bbox"], region):
-                        continue
+                overlap = _region_overlaps_box(detection["bbox"], region)
+                center_inside = _region_contains_center(detection["bbox"], region)
+                distance = _region_distance(detection["bbox"], region)
                 person_center = center_of_box(report["box"])
                 dx = ppe_center[0] - person_center[0]
                 dy = ppe_center[1] - person_center[1]
-                distance = dx * dx + dy * dy
-                if distance < best_distance:
-                    best_distance = distance
+                person_distance = float(np.hypot(dx, dy))
+
+                allow = False
+                if normalized_label == "helmet":
+                    allow = center_inside or overlap >= 0.01 or distance < 120.0
+                elif normalized_label == "vest":
+                    allow = overlap >= 0.005 or center_inside or person_distance < 200.0
+                elif normalized_label in {"glove", "boot"}:
+                    allow = center_inside or overlap >= 0.005 or distance < 150.0
+                elif normalized_label == "goggle":
+                    allow = overlap >= 0.005 or center_inside or distance < 100.0
+
+                if not allow:
+                    continue
+
+                score = person_distance * 0.2 + distance * 0.8 + max(0.0, 1.0 - overlap) * 100.0
+                if score < best_score:
+                    best_score = score
                     best_person = report
+                    best_region = region_name
                 break
 
         if best_person is not None:
-            best_person["assigned_ppe"].append({**detection, "label": normalized_label})
+            best_person["assigned_ppe"].append({**detection, "label": normalized_label, "matched_region": best_region})
     return person_reports

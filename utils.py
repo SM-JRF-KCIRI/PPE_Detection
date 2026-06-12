@@ -90,9 +90,10 @@ def generate_compliance_report(person_reports):
                 "YES" if report.get("vest") else "NO",
                 "YES" if report.get("hook") else "NO",
                 "YES" if report.get("glove") else "NO",
-                "YES" if report.get("shoe") else "NO",
+                "YES" if report.get("boot") else "NO",
                 "YES" if report.get("goggles") else "NO",
-                report.get("status", "NON-COMPLIANT"),
+                report.get("status", "UNKNOWN"),
+                report.get("reason", "Matched PPE evaluated."),
             ]
         )
     return rows

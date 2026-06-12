@@ -2,57 +2,75 @@ from pathlib import Path
 
 import os as _os
 
+BASE_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path("D:/newppe/roboflow")
-BEST_PPE_MODEL_PATH = DATA_ROOT / "best.pt"
+PPE_MODEL_CANDIDATES = [
+    BASE_DIR / "runs" / "ppe_train" / "v1" / "weights" / "best.pt",
+    BASE_DIR / "best" / "best.pt",
+    BASE_DIR / "best" / "best_1.pt",
+    BASE_DIR / "best" / "best_2.pt",
+]
+PPE_MODEL_PATH = next((path for path in PPE_MODEL_CANDIDATES if path.exists()), None)
+if PPE_MODEL_PATH is None:
+    raise FileNotFoundError("No PPE model file was found under the expected paths.")
+
+HELMET_MODEL_PATH = BASE_DIR / "helmet" / "best.pt"
+if not HELMET_MODEL_PATH.exists():
+    HELMET_MODEL_PATH = None
+
+POSE_MODEL_PATH = BASE_DIR / "yolov8n-pose.pt"
+if not POSE_MODEL_PATH.exists():
+    POSE_MODEL_PATH = BASE_DIR / "yolov8-pose.pt"
+
+BEST_PPE_MODEL_PATH = PPE_MODEL_PATH
 BASE_MODEL_PATH = "yolov8m.pt"
-_TRAINED_MODEL = "runs/ppe_train/v1/weights/best.pt"
-_FALLBACK_MODEL = BASE_MODEL_PATH
-if _os.path.isfile(_TRAINED_MODEL):
-    PPE_MODEL_PATH = _TRAINED_MODEL
-    print(f"[config] Using trained PPE model: {PPE_MODEL_PATH}")
-else:
-    PPE_MODEL_PATH = _FALLBACK_MODEL
-    print(f"[config] WARNING: Trained model not found at {_TRAINED_MODEL}")
-    print(f"[config] WARNING: Falling back to {_FALLBACK_MODEL} (COCO model)")
-    print(f"[config] WARNING: PPE detection will NOT work until training completes.")
-    print(f"[config] Run: python train.py --data roboflow/data.yaml --epochs 100 --batch 16")
-POSE_MODEL_PATH = "yolov8-pose.pt" if Path("yolov8-pose.pt").exists() else "yolov8n-pose.pt"
 
 DEFAULT_CONFIDENCE = 0.35
 DEFAULT_IOU = 0.45
+PPE_CONFIDENCE = float(_os.getenv("PPE_CONFIDENCE", "0.25"))
+DEBUG_MODE = _os.getenv("PPE_DEBUG", "0") == "1"
+POSE_CONFIDENCE = float(_os.getenv("POSE_CONFIDENCE", "0.35"))
+PERSON_CONFIDENCE = float(_os.getenv("PERSON_CONFIDENCE", "0.35"))
 CONFIDENCE_RANGE = (0.1, 0.7)
 IOU_RANGE = (0.1, 0.7)
 
 DATASET_CLASS_NAMES = ["Boots", "Gloves", "Goggles", "Helmet", "Person", "Vest"]
 
-# These mappings normalize detector labels to canonical PPE categories.
+# Canonical PPE labels used throughout the pipeline.
 CLASS_NORMALIZATION = {
-    "boots": "shoe",
-    "boot": "shoe",
-    "workboot": "shoe",
+    "boots": "boot",
+    "boot": "boot",
+    "safety_boots": "boot",
+    "safety boots": "boot",
+    "workboot": "boot",
+    "shoe": "boot",
+    "shoes": "boot",
     "gloves": "glove",
     "glove": "glove",
-    "goggles": "goggles",
-    "goggle": "goggles",
-    "safety goggles": "goggles",
-    "safety goggle": "goggles",
+    "goggles": "goggle",
+    "goggle": "goggle",
+    "safety_goggles": "goggle",
+    "safety goggles": "goggle",
     "helmet": "helmet",
     "hardhat": "helmet",
     "safety helmet": "helmet",
+    "safety_helmet": "helmet",
     "safetyhelmet": "helmet",
     "vest": "vest",
     "safety vest": "vest",
+    "safety_vest": "vest",
     "hi-vis": "vest",
     "hi vis": "vest",
     "hook": "hook",
     "safety hook": "hook",
+    "person": "person",
 }
 KEYPOINT_CONFIDENCE_THRESHOLD = 0.3
-PPE_CONF_THRESHOLD = 0.25
+PPE_CONF_THRESHOLD = PPE_CONFIDENCE
 
-PPE_CLASS_LABELS = ["helmet", "vest", "glove", "hook", "shoe", "goggles"]
-OPTIONAL_PPE_LABELS = {"hook", "goggles"}
-REQUIRED_PPE_LABELS = [label for label in PPE_CLASS_LABELS if label not in OPTIONAL_PPE_LABELS]
+PPE_CLASS_LABELS = ["helmet", "vest", "glove", "boot", "goggle", "hook"]
+OPTIONAL_PPE_LABELS = {"goggle", "hook"}
+REQUIRED_PPE_LABELS = ["helmet", "vest", "glove", "boot"]
 
 TRACKER_MAX_AGE = 30
 TRACKER_MIN_HITS = 3
@@ -63,8 +81,8 @@ PPE_REGION_MAP = {
     "helmet": "head",
     "vest": "chest",
     "glove": "hands",
+    "boot": "foot",
     "hook": "belt",
-    "shoe": "foot",
     "goggles": "head",
 }
 

@@ -1,5 +1,5 @@
 from collections import deque
-from typing import Deque, Dict
+from typing import Deque, Dict, Optional
 
 from config import SMOOTHING_WINDOW
 
@@ -7,24 +7,27 @@ from config import SMOOTHING_WINDOW
 class TemporalSmoother:
     def __init__(self, window: int = SMOOTHING_WINDOW):
         self.window = window
-        self.history: Dict[int, Deque[Dict[str, bool]]] = {}
+        self.history: Dict[int, Deque[Dict[str, Optional[bool]]]] = {}
 
-    def smooth(self, person_id: int, current_status: Dict[str, bool]) -> Dict[str, bool]:
-        if person_id not in self.history:
-            self.history[person_id] = deque(maxlen=self.window)
-        self.history[person_id].append(current_status)
-        counts = {key: 0 for key in current_status if isinstance(current_status[key], bool)}
-        for item in self.history[person_id]:
-            for key, value in item.items():
-                if isinstance(value, bool) and value:
+    def smooth(self, person_id: int, current_status: Dict[str, Optional[bool]]) -> Dict[str, Optional[bool]]:
+        history = self.history.setdefault(person_id, deque(maxlen=self.window))
+        history.append({key: value for key, value in current_status.items() if value is not None})
+
+        counts = {key: 0 for key in current_status}
+        valid_counts = {key: 0 for key in current_status}
+        for entry in history:
+            for key, value in entry.items():
+                if value is True:
                     counts[key] += 1
-        stabilised = {
-            key: counts[key] >= max(1, len(self.history[person_id]) // 2 + 1)
-            for key in counts
+                if value is not None:
+                    valid_counts[key] += 1
+
+        return {
+            key: None if valid_counts[key] == 0 else counts[key] >= max(1, (valid_counts[key] + 1) // 2)
+            for key in current_status
         }
-        return stabilised
 
     def prune(self, active_ids):
-        stale_ids = [pid for pid in self.history.keys() if pid not in active_ids]
-        for pid in stale_ids:
-            self.history.pop(pid, None)
+        stale_ids = [person_id for person_id in self.history.keys() if person_id not in active_ids]
+        for person_id in stale_ids:
+            self.history.pop(person_id, None)

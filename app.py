@@ -15,15 +15,17 @@ from config import (
     BEST_PPE_MODEL_PATH,
     BASE_MODEL_PATH,
     CONFIDENCE_RANGE,
+    DEBUG_MODE,
     DEFAULT_CONFIDENCE,
     DEFAULT_IOU,
+    HELMET_MODEL_PATH,
     IOU_RANGE,
     PPE_MODEL_PATH,
     POSE_MODEL_PATH,
-    REQUIRED_PPE_LABELS,
 )
 from compliance import evaluate_compliance
 from detector import PPEDetector
+from ensemble_detector import PPEEnsembleDetector, print_model_comparison_report
 from pose_engine import PoseEngine
 from ppe_matcher import assign_ppe_to_person, extract_body_regions
 from report_generator import build_report_rows
@@ -39,12 +41,9 @@ try:
 except ImportError:
     DEVICE = "cpu"
 
-if (isinstance(PPE_MODEL_PATH, Path) and PPE_MODEL_PATH.name == BASE_MODEL_PATH) or PPE_MODEL_PATH == BASE_MODEL_PATH:
-    print(f"WARNING: Custom PPE model not found at {BEST_PPE_MODEL_PATH}. Falling back to YOLOv8m baseline.")
-else:
-    print(f"Loading custom PPE model from {PPE_MODEL_PATH}")
-
-print(f"Loading pose model from {POSE_MODEL_PATH}")
+print(f"PPE Model Loaded: {PPE_MODEL_PATH}")
+print(f"Helmet Model Loaded: {HELMET_MODEL_PATH}")
+print(f"Pose Model Loaded: {POSE_MODEL_PATH}")
 
 def health_check() -> dict:
     issues = []
@@ -65,7 +64,8 @@ def health_check() -> dict:
         "issues": issues,
     }
 
-ppe_detector = PPEDetector(PPE_MODEL_PATH, device=DEVICE)
+print_model_comparison_report()
+ppe_detector = PPEEnsembleDetector(device=DEVICE)
 pose_engine = PoseEngine(POSE_MODEL_PATH, device=DEVICE)
 tracker = ByteTrackTracker()
 smoother = TemporalSmoother()
@@ -119,20 +119,21 @@ def build_person_reports(frame, persons, ppe_detections) -> List[dict]:
         smoothed = smoother.smooth(
             report["person_id"],
             {
-                "helmet": compliance["helmet"],
-                "vest": compliance["vest"],
-                "hook": compliance["hook"],
-                "glove": compliance["glove"],
-                "shoe": compliance["shoe"],
+                "helmet": compliance.get("helmet"),
+                "vest": compliance.get("vest"),
+                "hook": compliance.get("hook"),
+                "glove": compliance.get("glove"),
+                "boot": compliance.get("boot"),
                 "goggles": compliance.get("goggles"),
             },
         )
-        if all(smoothed[label] for label in REQUIRED_PPE_LABELS):
+        status = compliance.get("status", "UNKNOWN")
+        if status == "COMPLIANT":
             status = "COMPLIANT"
-        elif not any(smoothed[label] for label in REQUIRED_PPE_LABELS):
-            status = "INTRUDER"
+        elif status == "NON-COMPLIANT":
+            status = "NON-COMPLIANT"
         else:
-            status = "VIOLATION"
+            status = status
         final_report = {
             "person_id": report["person_id"],
             "box": report["box"],
@@ -142,17 +143,18 @@ def build_person_reports(frame, persons, ppe_detections) -> List[dict]:
             "assigned_ppe": report["assigned_ppe"],
             "helmet": smoothed["helmet"],
             "vest": smoothed["vest"],
-            "hook": smoothed["hook"],
-            "glove": smoothed["glove"],
-            "shoe": smoothed["shoe"],
+            "hook": smoothed.get("hook"),
+            "glove": smoothed.get("glove"),
+            "boot": smoothed.get("boot"),
             "goggles": smoothed.get("goggles"),
             "status": status,
+            "reason": compliance.get("reason", "Matched PPE evaluated."),
         }
         final_reports.append(final_report)
         active_ids.append(report["person_id"])
 
     smoother.prune(active_ids)
-    annotated = draw_annotations(frame, final_reports, ppe_detections)
+    annotated = draw_annotations(frame, final_reports, ppe_detections, debug=DEBUG_MODE)
     return annotated, final_reports
 
 
@@ -232,7 +234,7 @@ def build_dashboard():
                 status_html = gr.Markdown("---")
 
         report_table = gr.Dataframe(
-            headers=["Person ID", "Helmet", "Vest", "Hook", "Glove", "Shoe", "Goggles", "Compliance"],
+            headers=["Person ID", "Helmet", "Vest", "Hook", "Glove", "Boot", "Goggles", "Status", "Reason"],
             datatype=["str", "str", "str", "str", "str", "str", "str", "str"],
             label="Compliance Report",
         )
