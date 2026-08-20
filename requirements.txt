@@ -1,0 +1,9 @@
+opencv-python>=4.8.0
+ultralytics>=8.0.0
+torch
+torchvision
+requests
+openpyxl
+flask
+urllib3
+numpy

@@ -1,0 +1,30 @@
+# Virtual Environments
+venv/
+trt10env/
+env/
+.env
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# TensorRT Engine files (hardware-specific)
+*.engine
+
+# Large media files and ONNX models exceeding GitHub file limits
+*.mp4
+*.avi
+*.mkv
+*.onnx
+
+# Runs & Outputs
+runs/
+screenshots/
+*.log
+
+# IDE & OS specific files
+.vscode/
+.idea/
+.DS_Store
