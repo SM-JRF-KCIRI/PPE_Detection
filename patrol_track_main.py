@@ -31,12 +31,6 @@ Merged patrol + person-tracking behavior:
      dedicated tilt speed (STAGE0_1_TILT_SPEED in ptz_shared.py)
      instead of the camera's default/fastest rate.
   6. Loops forever.
-  7. ALSO serves the raw (non-annotated) camera feed over plain
-     HTTP MJPEG on port 8080 (see ptz_shared.start_raw_feed_server),
-     so the dashboard backend can display live video independently
-     of patrol/tracking. This reuses the SAME FrameGrabber/RTSP
-     connection the detection loop already has open - it does not
-     open a second connection to the camera.
 
 Run this file - it imports everything it needs from ptz_shared.py
 (which must be in the same folder).
@@ -55,7 +49,7 @@ from ptz_shared import (
     DWELL_TIME,
     ZOOM_STAGES, TILT_STAGES, ZOOM_HOLD_TIME, SPEED_STAGES,
     STAGE0_1_TILT_SPEED, STAGE1_RESET_DWELL_TIME,
-    YOLO_MODEL_PATH, YOLO_CONF_THRESHOLD, YOLO_IMG_SIZE, YOLO_DEVICE, YOLO_HALF,
+    YOLO_MODEL_PATH, YOLO_CONF_THRESHOLD, YOLO_IMG_SIZE, YOLO_DEVICE,
     TRACKER_CONFIG, PERSON_CLASS_NAME,
     PROCESS_WIDTH, PROCESS_HEIGHT, WINDOW_NAME,
     PPE_OVERLAP_THRESHOLD, PPE_CLASS_STATUS_MAP, PPE_CLASS_STATUS_MAP_LOWER,
@@ -65,8 +59,9 @@ from ptz_shared import (
     SharedState, PTZController, FrameGrabber, TargetTracker, PPEExcelLogger,
     CooldownManager, select_next_target, ptz_command_loop,
     maybe_alert_violation, intersection_over_box_area,
-    start_raw_feed_server,
-    update_annotated_frame,
+    # NEW: backend alert + feed server
+    PPEAlertManager, FeedServer,
+    CAMERA_ID, FEED_SERVER_PORT,
 )
 
 # =====================================================
@@ -417,30 +412,7 @@ def wait_for_first_frame(grabber):
 def run_detection_and_tracking(rtsp_url, ptz, shared_state):
 
     print(f"\nLoading YOLO model: {YOLO_MODEL_PATH}")
-    model = YOLO(YOLO_MODEL_PATH, task="detect")
-    
-    # TensorRT engines do not store custom class names by default, which causes
-    # Ultralytics to generate default placeholders {0: 'class0', 1: 'class1', ... 999: 'class999'}.
-    # If using .engine, restore the model's actual class names into the predictor/model.
-    ppe_names = {
-        0: 'boots',
-        1: 'gloves',
-        2: 'hardhat',
-        3: 'no_boots',
-        4: 'no_gloves',
-        5: 'no_hardhat',
-        6: 'no_vest',
-        7: 'person',
-        8: 'vest'
-    }
-    if YOLO_MODEL_PATH.endswith(".engine") or not getattr(model, "names", None) or model.names.get(0) == "class0":
-        if not model.predictor:
-            model.predictor = model._smart_load("predictor")(overrides=model.overrides, _callbacks=model.callbacks)
-            model.predictor.setup_model(model=model.model, verbose=False)
-        if hasattr(model.predictor, "model") and hasattr(model.predictor.model, "names"):
-            model.predictor.model.names = ppe_names
-        if hasattr(model.model, "names"):
-            model.model.names = ppe_names
+    model = YOLO(YOLO_MODEL_PATH)
     print(f"Model classes: {model.names}")
 
     device = pick_device()
@@ -448,11 +420,6 @@ def run_detection_and_tracking(rtsp_url, ptz, shared_state):
 
     print(f"\nOpening camera stream: {rtsp_url}")
     grabber = FrameGrabber(rtsp_url).start()
-
-    # Serve the raw (non-annotated) camera feed to the dashboard,
-    # independent of patrol/tracking. Reuses this same grabber -
-    # no second connection to the camera.
-    start_raw_feed_server(grabber)
 
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
 
@@ -488,6 +455,20 @@ def run_detection_and_tracking(rtsp_url, ptz, shared_state):
     # ppe_log_cooldown above - a person can be "off" the tracking
     # cooldown/on the log cooldown or vice versa.
     tracking_cooldown = CooldownManager(cooldown_seconds=TRACKING_COOLDOWN_SECONDS)
+
+    # =====================================================
+    # NEW: Backend PPE alert manager + integrated feed server
+    # =====================================================
+    # PPEAlertManager: async worker thread that sends HTTP POST alerts
+    # to the backend.  Should_send_alert() / queue_alert() are called
+    # from the detection loop below and are completely non-blocking.
+    alert_manager = PPEAlertManager()
+
+    # FeedServer: Flask MJPEG server running in a daemon thread.
+    # Serves /feed (raw) and /annotated_feed (YOLO bounding-box).
+    # update_raw() / update_annotated() are called every frame.
+    feed_server = FeedServer(port=FEED_SERVER_PORT)
+    feed_server.start()
 
     fps_timer = time.time()
     fps_counter = 0
@@ -526,6 +507,8 @@ def run_detection_and_tracking(rtsp_url, ptz, shared_state):
             mode = shared_state.get_mode()
             target = None
             active_violations = []
+            # NEW: set once per frame when a backend alert is due
+            _pending_ppe_alert = None
 
             if mode == "PATROL":
 
@@ -614,6 +597,17 @@ def run_detection_and_tracking(rtsp_url, ptz, shared_state):
 
                         if item_status_this_frame.get(item) != "VIOLATION":
                             item_status_this_frame[item] = status
+
+                    # NEW: Check global 15-second backend alert cooldown.
+                    # If violations exist and cooldown has expired, stage
+                    # an alert. The actual queue_alert() call is deferred
+                    # until annotated_frame (with bounding boxes) is ready.
+                    if active_violations and alert_manager.should_send_alert():
+                        _pending_ppe_alert = (
+                            target["id"],
+                            list(active_violations),
+                            dict(item_status_this_frame),
+                        )
 
                     # Only write a new Excel row if this Track ID
                     # isn't currently on cooldown (see spec: each
@@ -733,7 +727,26 @@ def run_detection_and_tracking(rtsp_url, ptz, shared_state):
                         (10, 115), cv2.FONT_HERSHEY_SIMPLEX, 0.7, ppe_color, 2
                     )
 
-            update_annotated_frame(annotated_frame)
+            # NEW: Push frames to MJPEG feed server (non-blocking)
+            feed_server.update_raw(frame)
+            feed_server.update_annotated(annotated_frame)
+
+            # NEW: Queue backend PPE alert if one was staged in the
+            # tracking block above. Deferred to here so the snapshot
+            # captures the fully-annotated frame (bounding boxes +
+            # status overlays).  alert_manager.queue_alert() is
+            # non-blocking - it saves the JPEG and drops the job on
+            # the worker queue; the HTTP POST happens in the background.
+            if _pending_ppe_alert is not None:
+                _pid, _viols, _istat = _pending_ppe_alert
+                alert_manager.queue_alert(
+                    person_id      = _pid,
+                    violations     = _viols,
+                    item_status    = _istat,
+                    snapshot_frame = annotated_frame.copy(),
+                )
+                _pending_ppe_alert = None
+
             cv2.imshow(WINDOW_NAME, annotated_frame)
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -747,6 +760,9 @@ def run_detection_and_tracking(rtsp_url, ptz, shared_state):
         cv2.destroyAllWindows()
         ppe_logger.close()
         print(f"PPE log saved to: {ppe_logger.path}")
+        # NEW: gracefully shut down the background alert worker
+        alert_manager.stop()
+
 
 
 # =====================================================

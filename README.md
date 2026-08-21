@@ -7,31 +7,31 @@ An end-to-end computer vision and PTZ camera control system designed for Nvidia 
 ## 🌟 Key Features
 
 - **Autonomous Multi-Stage PTZ Patrol**:
-  - Sweeps configurable pan/tilt/zoom waypoints (`HOME` -> `LEFT` -> `HOME` -> `RIGHT` -> `HOME`).
+  - Sweeps configurable pan/tilt/zoom waypoints (HOME -> LEFT -> HOME -> RIGHT -> HOME).
   - Implements 4 distinct sweep stages with varying tilt angles, zoom factors, and motor speeds.
   - Dedicated slow tilt transitions between wide and close inspection stages.
 
 - **Visual-Servo Target Tracking**:
   - Automatically interrupts patrol mode when a person is detected.
-  - Locks onto the target using ByteTrack and drives ONVIF `ContinuousMove` velocity commands (proportional pan/tilt visual-servo with exponential smoothing and deadband stabilization).
+  - Locks onto the target using ByteTrack and drives ONVIF ContinuousMove velocity commands (proportional pan/tilt visual-servo with exponential smoothing and deadband stabilization).
   - Configurable tracking duration with a smart tracking cooldown manager to avoid endlessly following the same person.
 
 - **Real-Time PPE Compliance Analysis**:
   - Checks for 4 critical PPE items: **Hardhat**, **Safety Vest**, **Gloves**, and **Boots**.
-  - Distinguishes compliant items vs. non-compliant violations (`no_hardhat`, `no_vest`, etc.).
+  - Distinguishes compliant items vs. non-compliant violations (no_hardhat, no_vest, etc.).
   - Calculates bounding-box overlap between tracked persons and detected PPE items.
   - Generates automated visual annotations and on-screen HUD alerts.
 
-- **Automated Excel Compliance Logger (`ppe_log.xlsx`)**:
+- **Automated Excel Compliance Logger (ppe_log.xlsx)**:
   - Automatically records timestamped session logs per tracked person.
-  - Logs track ID, active patrol stage, individual status for each PPE category (`OK` vs `VIOLATION`), overall compliance, and violation details.
+  - Logs track ID, active patrol stage, individual status for each PPE category (OK vs VIOLATION), overall compliance, and violation details.
 
 - **Integrated HTTP MJPEG Feed Server**:
-  - Embedded Flask video server operating on port `8080` (reusing the existing RTSP grabber thread without opening redundant camera connections).
+  - Embedded Flask video server operating on port 8080 (reusing the existing RTSP grabber thread without opening redundant camera connections).
   - Endpoints for raw camera stream and annotated AI detection stream.
 
 - **Jetson & TensorRT Optimized**:
-  - Native support for TensorRT `.engine` models and FP16 half-precision inference.
+  - Native support for TensorRT .engine models and FP16 half-precision inference.
   - Hardware-accelerated GStreamer video decoding fallback to software decode.
 
 ---
@@ -57,15 +57,15 @@ The system supports the following 9 detection classes:
 
 | Class ID | Label | Category | Compliance Status |
 |---|---|---|---|
-| `0` | `boots` | Boots | **OK** |
-| `1` | `gloves` | Gloves | **OK** |
-| `2` | `hardhat` | Hardhat | **OK** |
-| `3` | `no_boots` | Boots | **VIOLATION** |
-| `4` | `no_gloves` | Gloves | **VIOLATION** |
-| `5` | `no_hardhat` | Hardhat | **VIOLATION** |
-| `6` | `no_vest` | Vest | **VIOLATION** |
-| `7` | `person` | Person | Target for PTZ Tracking |
-| `8` | `vest` | Vest | **OK** |
+| 0 | boots | Boots | **OK** |
+| 1 | gloves | Gloves | **OK** |
+| 2 | hardhat | Hardhat | **OK** |
+| 3 | no_boots | Boots | **VIOLATION** |
+| 4 | no_gloves | Gloves | **VIOLATION** |
+| 5 | no_hardhat | Hardhat | **VIOLATION** |
+| 6 | no_vest | Vest | **VIOLATION** |
+| 7 | person | Person | Target for PTZ Tracking |
+| 8 | vest | Vest | **OK** |
 
 ---
 
@@ -75,16 +75,16 @@ Once the application is running, the embedded web server provides live MJPEG str
 
 | Endpoint | Description |
 |---|---|
-| `http://<device-ip>:8080/` | Web landing page with stream links and status |
-| `http://<device-ip>:8080/feed` | Live Raw Camera Feed (MJPEG) |
-| `http://<device-ip>:8080/feed/0` | Camera Channel 0 Raw Feed |
-| `http://<device-ip>:8080/annotated_feed` | Live AI Detection Feed with bounding boxes & HUD |
+| http://<device-ip>:8080/ | Web landing page with stream links and status |
+| http://<device-ip>:8080/feed | Live Raw Camera Feed (MJPEG) |
+| http://<device-ip>:8080/feed/0 | Camera Channel 0 Raw Feed |
+| http://<device-ip>:8080/annotated_feed | Live AI Detection Feed with bounding boxes & HUD |
 
 ---
 
 ## ⚙️ Configuration
 
-Key settings can be adjusted in `ptz_shared.py`:
+Key settings can be adjusted in ptz_shared.py:
 
 - **Camera & ONVIF Connection**:
   ```python
@@ -107,7 +107,7 @@ Key settings can be adjusted in `ptz_shared.py`:
   TILT_KP = 0.6
   MAX_PAN_SPEED = 0.1
   MAX_TILT_SPEED = 0.1
-  TRACK_DURATION = 5.0  # seconds per lock-on session
+  TRACK_DURATION = 5.0
   ```
 
 ---
@@ -139,7 +139,7 @@ To build a hardware-optimized TensorRT engine on your Jetson:
 yolo export model=best.pt format=engine device=0 half=True imgsz=640
 ```
 
-Update `YOLO_MODEL_PATH = "best_native.engine"` in `ptz_shared.py`.
+Update YOLO_MODEL_PATH = "best_native.engine" in ptz_shared.py.
 
 ### 3. Running the Pipeline
 
@@ -147,4 +147,4 @@ Update `YOLO_MODEL_PATH = "best_native.engine"` in `ptz_shared.py`.
 python patrol_track_main.py
 ```
 
-Press `q` in the OpenCV video window to stop execution and save the Excel log.
+Press q in the OpenCV video window to stop execution and save the Excel log.

@@ -19,7 +19,10 @@ plumbing both the patrol state machine and the tracking state
 machine share.
 """
 
+import base64
+import json
 import os
+import queue
 import time
 import datetime
 import threading
@@ -28,11 +31,12 @@ import cv2
 import requests
 import xml.etree.ElementTree as ET
 
+from flask import Flask, Response
 from requests.auth import HTTPDigestAuth
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from openpyxl import Workbook, load_workbook
-from flask import Flask, Response
+
 # =====================================================
 # CAMERA SETTINGS
 # =====================================================
@@ -128,17 +132,9 @@ STAGE1_RESET_DWELL_TIME = 2.0
 # YOLO / DETECTION SETTINGS (shared by patrol-trigger AND tracking)
 # =====================================================
 
-# JETSON OPTIMIZATION (biggest speed win, manual one-time step - not
-# applied automatically here since it must be done ON the Jetson itself):
-# export your best.pt to a TensorRT engine on the Jetson:
-#   yolo export model=best.pt format=engine device=0 half=True imgsz=480
-# then point this at the resulting "best.engine" file. ultralytics'
-# model.track()/predict() call signature and every line of this project's
-# logic stays 100% identical either way - only the loaded weights file
-# changes, since YOLO(...) auto-detects .pt vs .engine.
-YOLO_MODEL_PATH = "best_native.engine"
+YOLO_MODEL_PATH = "best.pt"
 YOLO_CONF_THRESHOLD = 0.6
-YOLO_IMG_SIZE = 640
+YOLO_IMG_SIZE = 480
 
 # ByteTrack config shipped with ultralytics.
 TRACKER_CONFIG = "bytetrack.yaml"
@@ -149,15 +145,6 @@ PROCESS_WIDTH = 960
 PROCESS_HEIGHT = 540
 
 YOLO_DEVICE = 0  # falls back to CPU automatically if CUDA isn't available
-
-# JETSON OPTIMIZATION: run inference in FP16 (half precision) instead of
-# FP32. This is a pure inference-backend speed optimization - it does not
-# change any detection/tracking/PPE logic, only how the numbers are
-# computed on the GPU (Jetson's Tensor Cores are much faster at FP16).
-# Only takes effect when running on CUDA (device != "cpu") - on CPU this
-# flag is ignored by ultralytics. Set to False to match the original
-# laptop FP32 behavior exactly if you ever need to A/B compare.
-YOLO_HALF = True
 
 WINDOW_NAME = "Patrol + PPE Tracking - Live Feed"
 
@@ -281,6 +268,66 @@ PPE_LOG_COOLDOWN_SECONDS = 300.0
 
 SCREENSHOT_DIR = "screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+
+# =====================================================
+# NEW: BACKEND PPE ALERT SETTINGS
+# =====================================================
+# The ONLY section you ever need to edit.
+#
+# BACKEND_BASE_URL     - Backend server base URL (no trailing slash)
+# BACKEND_CAMERA_ID    - Integer camera FK in the backend DB (ask dev)
+# BACKEND_SITE_ID      - Integer site FK in the backend DB (ask dev)
+# BACKEND_AUTH_TOKEN   - JWT access token (short-lived, ~1 hr)
+# BACKEND_REFRESH_TOKEN- JWT refresh token (use to get new access token)
+# BACKEND_USERNAME /   - Login credentials used when both tokens expire
+# BACKEND_PASSWORD       (ask backend developer)
+# =====================================================
+
+BACKEND_BASE_URL      = "http://10.1.150.142:8000"
+BACKEND_SERVER_URL    = f"{BACKEND_BASE_URL}/api/ai-alerts/"
+BACKEND_REFRESH_URL   = f"{BACKEND_BASE_URL}/api/auth/token/refresh/"  # Django SimpleJWT standard
+BACKEND_LOGIN_URL     = f"{BACKEND_BASE_URL}/api/auth/login/"           # confirm with dev
+
+# Camera / site integer FK IDs in the backend database
+BACKEND_CAMERA_ID     = 1    # integer - camera_id column in ai_alerts table
+BACKEND_SITE_ID       = 1    # integer - site_id column in ai_alerts table
+
+# String used to identify this camera in filenames / local logging only
+CAMERA_ID             = "camera_01"
+
+# --- JWT tokens (from backend developer / login response) ---
+# The worker auto-refreshes using BACKEND_REFRESH_TOKEN when the
+# access token expires (HTTP 401).  When the refresh token also
+# expires, it falls back to BACKEND_USERNAME / BACKEND_PASSWORD.
+BACKEND_AUTH_TOKEN    = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+    ".eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg3MjQwNjM2LCJpYXQiOjE3ODcy"
+    "MzcwMzYsImp0aSI6IjE0OWYxZWIyOTljYzQ1MWY4YTczODA5NzRmMmU5YzVkIiwidXNlcl"
+    "9pZCI6IjIifQ.oR0XgPoOY8qNyobWmzgI9zmwJoDUbz22MaiQTmaHYEE"
+)
+BACKEND_REFRESH_TOKEN = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+    ".eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc4NzIzODgzNiwiaWF0IjoxNzg3Mj"
+    "M3MDM2LCJqdGkiOiI2ZWQzNDE4YTI5MGY0ZTE1ODZkMThjYjFkYTA4OGY1NSIsInVzZXJfaW"
+    "QiOiIyIn0.NG8-q-7T4ljGUxMn68k0JpgnbZxVtchovrEVA0pBYEo"
+)
+
+# Fallback login credentials (used when both tokens expire).
+# Ask backend dev for a dedicated Jetson service account.
+BACKEND_USERNAME      = "admin"       # backend login username
+BACKEND_PASSWORD      = "Admin@123"   # backend login password
+
+# --- Timing / Queue ---
+PPE_ALERT_COOLDOWN_SECONDS = 15.0   # global cooldown: one alert per 15 s max
+BACKEND_REQUEST_TIMEOUT    = 5.0    # seconds before giving up on HTTP POST
+MAX_ALERT_QUEUE_SIZE       = 3      # drop oldest if queue exceeds this
+BACKEND_SNAPSHOT_DIR       = "backend_alert_snapshots"
+os.makedirs(BACKEND_SNAPSHOT_DIR, exist_ok=True)
+
+# =====================================================
+# NEW: INTEGRATED MJPEG FEED SERVER PORT
+# =====================================================
+FEED_SERVER_PORT = 8080
 
 # How often (seconds) blocking wait-loops re-check for an
 # interrupt / re-check camera position. Smaller = camera stops
@@ -589,6 +636,162 @@ class PPEExcelLogger:
 
 
 # =====================================================
+# NEW: INTEGRATED MJPEG FEED SERVER
+# =====================================================
+# Hosts both raw and YOLO-annotated MJPEG streams on FEED_SERVER_PORT
+# (default 8080).
+#
+# Routes:
+#   /feed                  -> raw camera frame
+#   /feed/0                -> raw camera frame (alias)
+#   /feed/<camera_id>      -> raw camera frame (alias)
+#   /annotated_feed        -> YOLO-annotated frame (bounding boxes)
+#   /feed/annotated        -> same as /annotated_feed
+#
+# Usage (from patrol_track_main.py):
+#   feed_server = FeedServer()
+#   feed_server.start()
+#   # inside detection loop:
+#   feed_server.update_raw(frame)
+#   feed_server.update_annotated(annotated_frame)
+
+class _FrameBroadcaster:
+    """Thread-safe, condition-variable-driven MJPEG frame broadcaster.
+    update() is non-blocking; generate() is a streaming generator."""
+
+    def __init__(self, quality=80):
+        self.params = [
+            int(cv2.IMWRITE_JPEG_QUALITY), quality,
+            int(cv2.IMWRITE_JPEG_OPTIMIZE), 1,
+        ]
+        self._lock = threading.Lock()
+        self._cond = threading.Condition(self._lock)
+        self._jpeg_bytes = None
+        self._seq = 0
+
+    def update(self, frame):
+        """Encode frame to JPEG and notify waiting generate() clients."""
+        if frame is None:
+            return
+        ok, buf = cv2.imencode(".jpg", frame, self.params)
+        if ok:
+            with self._cond:
+                self._jpeg_bytes = buf.tobytes()
+                self._seq += 1
+                self._cond.notify_all()
+
+    def generate(self):
+        """MJPEG streaming generator (one yield per new frame)."""
+        last_seq = 0
+        while True:
+            with self._cond:
+                while self._seq == last_seq or self._jpeg_bytes is None:
+                    if not self._cond.wait(timeout=0.1):
+                        break
+                data = self._jpeg_bytes
+                last_seq = self._seq
+            if data is not None:
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    b"Content-Length: " + str(len(data)).encode() + b"\r\n\r\n"
+                    + data + b"\r\n"
+                )
+
+
+class FeedServer:
+    """Lightweight Flask MJPEG server running in a daemon thread.
+
+    Serves both a raw and an annotated MJPEG stream from the
+    detection loop in patrol_track_main.py without blocking it.
+    update_raw() and update_annotated() are non-blocking calls.
+    """
+
+    def __init__(self, port=FEED_SERVER_PORT):
+        self.port = port
+        self._raw_bc  = _FrameBroadcaster(quality=75)   # raw camera
+        self._ann_bc  = _FrameBroadcaster(quality=80)   # YOLO annotated
+        self._app     = self._build_app()
+        self._thread  = None
+
+    # --------------------------------------------------
+    def update_raw(self, frame):
+        """Call every frame with the raw (un-annotated) camera frame."""
+        self._raw_bc.update(frame)
+
+    def update_annotated(self, frame):
+        """Call every frame with the YOLO-annotated (bounding-box) frame."""
+        self._ann_bc.update(frame)
+
+    # --------------------------------------------------
+    def _mjpeg_response(self, broadcaster):
+        res = Response(
+            broadcaster.generate(),
+            mimetype="multipart/x-mixed-replace; boundary=frame",
+        )
+        res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        res.headers["Pragma"]        = "no-cache"
+        res.headers["Expires"]       = "0"
+        return res
+
+    def _build_app(self):
+        import logging
+        log = logging.getLogger("werkzeug")
+        log.setLevel(logging.ERROR)  # suppress Flask per-request logs
+
+        app = Flask(__name__ + "_feed")
+
+        raw_bc = self._raw_bc
+        ann_bc = self._ann_bc
+        mjpeg  = self._mjpeg_response
+
+        @app.route("/feed")
+        @app.route("/feed/0")
+        @app.route("/feed/<path:camera_id>")
+        def raw_feed(camera_id=None):
+            return mjpeg(raw_bc)
+
+        @app.route("/annotated_feed")
+        @app.route("/feed/annotated")
+        def annotated_feed():
+            return mjpeg(ann_bc)
+
+        @app.route("/")
+        def index():
+            return (
+                "Jetson PPE Feed Server<br>"
+                "<a href='/feed'>/feed</a> &mdash; raw camera<br>"
+                "<a href='/annotated_feed'>/annotated_feed</a> "
+                "&mdash; YOLO annotated"
+            )
+
+        return app
+
+    # --------------------------------------------------
+    def start(self):
+        """Start the Flask server in a background daemon thread."""
+        def _run():
+            self._app.run(
+                host="0.0.0.0",
+                port=self.port,
+                threaded=True,
+                use_reloader=False,
+            )
+
+        self._thread = threading.Thread(
+            target=_run, daemon=True, name="FeedServer"
+        )
+        self._thread.start()
+        print(f"[FEED SERVER] Started on port {self.port}")
+        print(f"[FEED SERVER]  Raw feed:       http://0.0.0.0:{self.port}/feed")
+        print(f"[FEED SERVER]  Annotated feed: http://0.0.0.0:{self.port}/annotated_feed")
+
+    def stop(self):
+        """No-op: the thread is a daemon and exits with the process."""
+        pass
+
+
+# =====================================================
 # BOX OVERLAP HELPER (attributing a PPE box to a tracked person)
 # =====================================================
 
@@ -688,37 +891,6 @@ def select_next_target(persons, tracking_cooldown_mgr):
 
 
 # =====================================================
-# JETSON OPTIMIZATION: HARDWARE-ACCELERATED RTSP DECODE
-# =====================================================
-# On the laptop, cv2.VideoCapture(..., cv2.CAP_FFMPEG) decodes H.264/H.265
-# in software on the CPU. The Jetson Orin Nano has a dedicated hardware
-# video decoder (NVDEC) that JetPack's OpenCV/GStreamer build can use via
-# the "nvv4l2decoder" element, which decodes RTSP frames almost for free
-# and leaves the CPU free for the ONVIF/patrol threads and Python/YOLO
-# glue code. This does NOT change what a "frame" is or how it's read
-# (FrameGrabber still just exposes the latest BGR frame the same way) -
-# it only changes which piece of hardware does the decoding.
-#
-# USE_GSTREAMER_HW_DECODE = True tries the hardware pipeline first and
-# transparently falls back to the original CAP_FFMPEG path if the
-# GStreamer pipeline can't be opened (e.g. running this same file on a
-# laptop without the Jetson multimedia API / nvv4l2decoder available) -
-# so the exact same script still runs unmodified on a laptop too.
-USE_GSTREAMER_HW_DECODE = True
-GSTREAMER_LATENCY_MS = 100
-
-
-def _build_gstreamer_pipeline(rtsp_url, latency_ms=GSTREAMER_LATENCY_MS):
-    return (
-        f"rtspsrc location=\"{rtsp_url}\" latency={latency_ms} ! "
-        "rtph264depay ! h264parse ! nvv4l2decoder ! "
-        "nvvidconv ! video/x-raw, format=BGRx ! "
-        "videoconvert ! video/x-raw, format=BGR ! "
-        "appsink drop=true max-buffers=1 sync=false"
-    )
-
-
-# =====================================================
 # THREADED FRAME GRABBER
 # =====================================================
 
@@ -727,24 +899,8 @@ class FrameGrabber:
     def __init__(self, rtsp_url):
 
         self.rtsp_url = rtsp_url
-        self.cap = None
-
-        if USE_GSTREAMER_HW_DECODE:
-            pipeline = _build_gstreamer_pipeline(rtsp_url)
-            gst_cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
-            if gst_cap.isOpened():
-                print("FrameGrabber: using Jetson hardware decode (nvv4l2decoder).")
-                self.cap = gst_cap
-            else:
-                gst_cap.release()
-                print(
-                    "FrameGrabber: hardware-decode GStreamer pipeline "
-                    "unavailable, falling back to software (CAP_FFMPEG) decode."
-                )
-
-        if self.cap is None:
-            self.cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         if not self.cap.isOpened():
             raise RuntimeError(
@@ -1124,98 +1280,415 @@ def ptz_command_loop(ptz, shared_state):
 
 
 # =====================================================
-# RAW & ANNOTATED FEED HTTP SERVER (for dashboard / clients)
+# NEW: BACKEND PPE ALERT MANAGER
 # =====================================================
+# Sends PPE violation alerts to the backend REST API asynchronously.
+#
+# KEY BEHAVIOURS:
+#   - Global 15-second cooldown  (ONE alert per PPE_ALERT_COOLDOWN_SECONDS,
+#     camera-wide; NOT per person, NOT per PPE item).
+#   - Bounded queue (MAX_ALERT_QUEUE_SIZE=3); oldest alert is dropped
+#     when the queue is full so stale data never accumulates.
+#   - Single persistent background worker thread - NEVER blocks YOLO,
+#     ByteTrack, PTZ, patrol, or the dashboard MJPEG feed.
+#   - HTTP POST with multipart/form-data:
+#       alert_data = JSON string
+#       image      = JPEG snapshot (annotated frame)
+#
+# INTEGRATION in patrol_track_main.py:
+#   alert_manager = PPEAlertManager()
+#   # inside detection loop, after active_violations is populated:
+#   if active_violations and alert_manager.should_send_alert():
+#       _pending_ppe_alert = (target["id"], list(active_violations),
+#                             dict(item_status_this_frame))
+#   # after annotated_frame is ready:
+#   if _pending_ppe_alert is not None:
+#       pid, viols, istat = _pending_ppe_alert
+#       alert_manager.queue_alert(pid, viols, istat, annotated_frame.copy())
+#       _pending_ppe_alert = None
+#   # on shutdown:
+#   alert_manager.stop()
 
-FEED_SERVER_PORT = 8080
+class PPEAlertManager:
+    """
+    Asynchronous PPE violation alert sender.
 
-_feed_app = Flask(__name__)
-_feed_grabber_ref = {
-    "grabber": None,
-    "annotated_frame": None,
-    "lock": threading.Lock()
-}
+    The detection loop calls should_send_alert() / queue_alert().
+    A single background worker thread pops from the bounded queue
+    and does the HTTP POST - the detection loop never waits for it.
+    """
 
+    def __init__(self):
+        self._lock            = threading.Lock()
+        self._last_alert_time = 0.0  # global cooldown timestamp
 
-def update_annotated_frame(frame):
-    """Update the latest YOLO-annotated frame for HTTP stream clients."""
-    with _feed_grabber_ref["lock"]:
-        _feed_grabber_ref["annotated_frame"] = frame.copy() if frame is not None else None
+        # Queue items: (alert_dict, snapshot_path_or_None)
+        self._queue     = queue.Queue(maxsize=MAX_ALERT_QUEUE_SIZE)
+        self._stop_evt  = threading.Event()
 
+        # JWT token cache — managed by _get_auth_token().
+        # Seeded from BACKEND_AUTH_TOKEN on startup; cleared on 401 so
+        # the worker automatically refreshes or re-logs in.
+        self._jwt_token     = BACKEND_AUTH_TOKEN   # pre-load static token
+        self._refresh_token = BACKEND_REFRESH_TOKEN  # pre-load refresh token
 
-def _raw_mjpeg_stream():
-    while True:
-        grabber = _feed_grabber_ref["grabber"]
-        if grabber is None:
-            time.sleep(0.1)
-            continue
-        ok, frame = grabber.read()
-        if not ok or frame is None:
-            time.sleep(0.05)
-            continue
-        ok2, buf = cv2.imencode(".jpg", frame)
-        if not ok2:
-            continue
-        yield (
-            b"--frame\r\n"
-            b"Content-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n"
+        os.makedirs(BACKEND_SNAPSHOT_DIR, exist_ok=True)
+
+        self._worker = threading.Thread(
+            target=self._worker_loop,
+            daemon=True,
+            name="PPEAlertWorker",
         )
+        self._worker.start()
+        print("[PPE ALERT] Alert manager started.")
+        print(f"[PPE ALERT]  Backend URL : {BACKEND_SERVER_URL}")
+        print(f"[PPE ALERT]  Camera ID   : {CAMERA_ID}")
+        print(f"[PPE ALERT]  Cooldown    : {PPE_ALERT_COOLDOWN_SECONDS}s")
+        if BACKEND_AUTH_TOKEN:
+            print("[PPE ALERT]  Auth        : Static JWT token configured.")
+        elif BACKEND_USERNAME:
+            print(f"[PPE ALERT]  Auth        : Auto-login as '{BACKEND_USERNAME}'.")
+        else:
+            print("[PPE ALERT]  Auth        : WARNING - no token or credentials set!")
 
+    # --------------------------------------------------
+    def should_send_alert(self):
+        """Returns True if the global 15-second cooldown has expired.
+        Thread-safe; read-only (does NOT start the cooldown)."""
+        with self._lock:
+            return (time.time() - self._last_alert_time) >= PPE_ALERT_COOLDOWN_SECONDS
 
-def _annotated_mjpeg_stream():
-    while True:
-        with _feed_grabber_ref["lock"]:
-            frame = _feed_grabber_ref["annotated_frame"]
-        if frame is None:
-            time.sleep(0.05)
-            continue
-        ok2, buf = cv2.imencode(".jpg", frame)
-        if not ok2:
-            continue
-        yield (
-            b"--frame\r\n"
-            b"Content-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n"
+    # --------------------------------------------------
+    def queue_alert(self, person_id, violations, item_status, snapshot_frame):
+        """
+        Called from the detection loop (non-blocking).
+
+        Steps:
+          1. Save snapshot_frame as a JPEG to BACKEND_SNAPSHOT_DIR.
+          2. Build the JSON alert payload.
+          3. Mark the global cooldown as starting NOW.
+          4. Put (alert_dict, snapshot_path) onto the bounded queue;
+             drop the OLDEST entry first if the queue is full.
+
+        Parameters
+        ----------
+        person_id     : int   - stable ByteTrack/StablePerson ID
+        violations    : list  - raw class names, e.g. ["no_hardhat"]
+        item_status   : dict  - {"Hardhat": "VIOLATION", "Vest": "OK", ...}
+        snapshot_frame: ndarray - current annotated frame (bounding boxes)
+        """
+        now    = time.time()
+        ts_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ts_file= datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # Build snapshot filename: camera_01_person_5_20260820_183020.jpg
+        snap_name = f"{CAMERA_ID}_person_{person_id}_{ts_file}.jpg"
+        snap_path = os.path.join(BACKEND_SNAPSHOT_DIR, snap_name)
+
+        # Save annotated snapshot to disk (detection loop, non-blocking write)
+        try:
+            cv2.imwrite(snap_path, snapshot_frame)
+        except Exception as exc:
+            print(f"[PPE ALERT] Snapshot save failed: {exc}")
+            snap_path = None
+
+        # Map raw class names (e.g. "no_hardhat") -> friendly item names
+        # (e.g. "Hardhat") and deduplicate.
+        friendly_violations = []
+        seen = set()
+        for cls_name in violations:
+            mapping = PPE_CLASS_STATUS_MAP_LOWER.get(cls_name.lower())
+            item_name = mapping[0] if mapping else cls_name
+            if item_name not in seen:
+                friendly_violations.append(item_name)
+                seen.add(item_name)
+
+        alert_dict = {
+            "camera_id"  : CAMERA_ID,
+            "person_id"  : person_id,
+            "ppe_violated": True,
+            "violations" : friendly_violations,
+            "ppe_status" : item_status,       # {"Hardhat": "OK/VIOLATION", ...}
+            "timestamp"  : ts_str,
+        }
+
+        # Start global cooldown NOW (before queuing avoids a race where
+        # should_send_alert() returns True again before worker picks up).
+        with self._lock:
+            self._last_alert_time = now
+
+        print(
+            f"[PPE ALERT] Violation detected for Person #{person_id} "
+            f"\u2014 Violations: {', '.join(friendly_violations)}"
         )
+        print("[PPE ALERT] Queued backend alert.")
+
+        # Non-blocking bounded put: drop oldest if full.
+        if self._queue.full():
+            try:
+                self._queue.get_nowait()
+                print("[PPE ALERT] Queue full - dropped oldest pending alert.")
+            except queue.Empty:
+                pass
+
+        try:
+            self._queue.put_nowait((alert_dict, snap_path))
+        except queue.Full:
+            pass  # extremely rare race between full-check and put - skip
+
+    # --------------------------------------------------
+    def _map_violation_type(self, violations):
+        """
+        Maps the list of friendly PPE item names (e.g. ["Hardhat", "Vest"])
+        to the backend's (type, severity) pair, matching the exact strings
+        already in the ai_alerts database:
+
+          "no_ppe"           -> multiple items missing  -> CRITICAL
+          "helmet_violation" -> Hardhat missing          -> CRITICAL
+          "vest_violation"   -> Vest missing             -> MAJOR
+          "gloves_violation" -> Gloves missing           -> MAJOR
+          "boots_violation"  -> Boots missing            -> MAJOR
+          "ppe_violation"    -> generic fallback         -> CRITICAL
+        """
+        if len(violations) >= 2:
+            return "no_ppe", "CRITICAL"
+        if not violations:
+            return "ppe_violation", "CRITICAL"
+        item = violations[0]
+        mapping = {
+            "Hardhat": ("helmet_violation", "CRITICAL"),
+            "Vest"   : ("vest_violation",   "MAJOR"),
+            "Gloves" : ("gloves_violation",  "MAJOR"),
+            "Boots"  : ("boots_violation",   "MAJOR"),
+        }
+        return mapping.get(item, ("ppe_violation", "CRITICAL"))
+
+    # --------------------------------------------------
+    def _get_auth_token(self):
+        """
+        Returns a valid JWT access token.
+        Priority:
+          1. self._jwt_token  (seeded from BACKEND_AUTH_TOKEN; cleared on 401)
+          2. Refresh using self._refresh_token (BACKEND_REFRESH_TOKEN)
+          3. Fresh login with BACKEND_USERNAME / BACKEND_PASSWORD
+        Returns empty string if all methods fail.
+
+        NOTE: Uses self._jwt_token (mutable, cleared on expiry), NOT
+        the BACKEND_AUTH_TOKEN constant directly, so that a 401 response
+        actually triggers refresh/re-login instead of retrying the same
+        expired static token forever.
+        """
+        # 1. Use cached/seeded access token
+        if self._jwt_token:
+            return self._jwt_token
+
+        # 2. Try to refresh using the refresh token
+        with self._lock:
+            refresh_tok = self._refresh_token
+
+        if refresh_tok:
+            try:
+                print("[PPE ALERT WORKER] Access token expired - refreshing ...")
+                resp = requests.post(
+                    BACKEND_REFRESH_URL,
+                    json={"refresh": refresh_tok},
+                    timeout=BACKEND_REQUEST_TIMEOUT,
+                )
+                if resp.status_code in (200, 201):
+                    data  = resp.json()
+                    token = data.get("access") or data.get("access_token")
+                    if token:
+                        with self._lock:
+                            self._jwt_token = token
+                        print("[PPE ALERT WORKER] Token refreshed successfully.")
+                        return token
+                    print(f"[PPE ALERT WORKER] Refresh OK but no access token in response: {data}")
+                else:
+                    print(f"[PPE ALERT WORKER] Token refresh failed: HTTP {resp.status_code}")
+                    with self._lock:
+                        self._refresh_token = ""  # refresh token also expired
+            except Exception as exc:
+                print(f"[PPE ALERT WORKER] Token refresh error: {exc}")
+
+        # 3. Fall back to username/password login
+        if not BACKEND_USERNAME or not BACKEND_PASSWORD:
+            print("[PPE ALERT WORKER] No valid token and no login credentials set.")
+            return ""
+
+        try:
+            print(f"[PPE ALERT WORKER] Logging in as '{BACKEND_USERNAME}' ...")
+            resp = requests.post(
+                BACKEND_LOGIN_URL,
+                json={"username": BACKEND_USERNAME, "password": BACKEND_PASSWORD},
+                timeout=BACKEND_REQUEST_TIMEOUT,
+            )
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                tokens_obj = (data.get("data") or {}).get("tokens") or {}
+                token = (
+                    data.get("access")
+                    or data.get("access_token")
+                    or data.get("token")
+                    or (data.get("data") or {}).get("access")
+                    or (data.get("data") or {}).get("access_token")
+                    or tokens_obj.get("access")
+                )
+                refresh = (
+                    data.get("refresh")
+                    or data.get("refresh_token")
+                    or (data.get("data") or {}).get("refresh")
+                    or tokens_obj.get("refresh")
+                )
+                if token:
+                    with self._lock:
+                        self._jwt_token     = token
+                        self._refresh_token = refresh or ""
+                    print("[PPE ALERT WORKER] Login successful, tokens cached.")
+                    return token
+                print(f"[PPE ALERT WORKER] Login OK but no token in response: {data}")
+            else:
+                print(f"[PPE ALERT WORKER] Login failed: HTTP {resp.status_code} - {resp.text[:200]}")
+        except Exception as exc:
+            print(f"[PPE ALERT WORKER] Login request error: {exc}")
+
+        return ""
 
 
-@_feed_app.route("/")
-def _feed_index():
-    return (
-        "Jetson feed server is running.<br>"
-        "Raw Feed: <a href='/feed'>/feed</a> or <a href='/feed/0'>/feed/0</a><br>"
-        "Annotated Feed: <a href='/annotated_feed'>/annotated_feed</a>"
-    )
+    # --------------------------------------------------
+    def _worker_loop(self):
+        """
+        Background worker thread.
+        Pops (alert_dict, snapshot_path) from the queue and does:
 
+          POST /api/ai-alerts/
+          Authorization: Bearer <access_token>
+          Content-Type: multipart/form-data
 
-@_feed_app.route("/feed")
-@_feed_app.route("/feed/0")
-@_feed_app.route("/feed/<path:camera_id>")
-def _feed_route(camera_id=None):
-    return Response(
-        _raw_mjpeg_stream(),
-        mimetype="multipart/x-mixed-replace; boundary=frame",
-    )
+          Fields (exact AIAlertRequest DB schema):
+            type        - string  : "helmet_violation" | "vest_violation" |
+                                    "gloves_violation" | "boots_violation" |
+                                    "no_ppe" (2+ items missing)
+            severity    - string  : "CRITICAL" | "MAJOR"
+            timestamp   - string  : ISO datetime e.g. "2026-08-20 18:30:20"
+            status      - string  : "OPEN"  (new alert)
+            camera_id   - integer : FK camera ID in backend DB
+            site_id     - integer : FK site ID in backend DB
+            snapshot    - file    : JPEG annotated frame (multipart)
 
+          Expected success: HTTP 201 Created
+        """
+        while not self._stop_evt.is_set():
+            try:
+                item = self._queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
 
-@_feed_app.route("/annotated_feed")
-@_feed_app.route("/feed/annotated")
-def _annotated_feed_route():
-    return Response(
-        _annotated_mjpeg_stream(),
-        mimetype="multipart/x-mixed-replace; boundary=frame",
-    )
+            alert_dict, snap_path = item
+            person_id  = alert_dict.get("person_id", "?")
+            violations = alert_dict.get("violations", [])
 
+            alert_type, severity = self._map_violation_type(violations)
 
-def start_raw_feed_server(grabber, port=FEED_SERVER_PORT):
-    """Starts a Flask HTTP server (background thread) serving the camera
-    frames as MJPEG. Reuses the SAME FrameGrabber the detection loop
-    already has open, so this does not open a second connection to the camera."""
+            print(
+                f"[PPE ALERT WORKER] Sending Person #{person_id} alert "
+                f"(type={alert_type}, severity={severity}) "
+                f"to {BACKEND_SERVER_URL} ..."
+            )
 
-    _feed_grabber_ref["grabber"] = grabber
+            file_handle = None
+            try:
+                # --- Build Authorization & Content-Type headers ---
+                token   = self._get_auth_token()
+                headers = {"Content-Type": "application/json"}
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
 
-    def _run():
-        _feed_app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
+                # --- Encode snapshot image as base64 ---
+                b64_snapshot = ""
+                if snap_path and os.path.exists(snap_path):
+                    try:
+                        with open(snap_path, "rb") as f:
+                            raw_bytes = f.read()
+                            b64_snapshot = f"data:image/jpeg;base64,{base64.b64encode(raw_bytes).decode('utf-8')}"
+                    except Exception as e:
+                        print(f"[PPE ALERT WORKER] Error encoding snapshot image: {e}")
 
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    print(f"[feed_server] Jetson feed server running at http://0.0.0.0:{port}/ (endpoints: /feed, /feed/0, /annotated_feed)")
+                # --- Build JSON payload matching Django AIAlert schema ---
+                data_payload = {
+                    "type"     : alert_type,
+                    "severity" : severity,
+                    "timestamp": alert_dict.get("timestamp", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                    "status"   : "OPEN",
+                    "camera"   : int(BACKEND_CAMERA_ID),
+                    "site"     : int(BACKEND_SITE_ID),
+                    "snapshot" : b64_snapshot,
+                }
+
+                resp = requests.post(
+                    BACKEND_SERVER_URL,
+                    json    = data_payload,
+                    headers = headers,
+                    timeout = BACKEND_REQUEST_TIMEOUT,
+                )
+
+                if resp.status_code == 201:
+                    try:
+                        resp_data = resp.json()
+                        alert_id  = (
+                            resp_data.get("alert_id")
+                            or (resp_data.get("data") or {}).get("alert_id")
+                            or "?"
+                        )
+                    except Exception:
+                        alert_id = "?"
+                    print(
+                        f"[PPE ALERT WORKER] Alert sent successfully "
+                        f"(HTTP 201, alert_id={alert_id}) "
+                        f"Person #{person_id} - {alert_type}"
+                    )
+
+                elif resp.status_code == 401:
+                    # Access token expired - clear cached tokens so next
+                    # attempt triggers a refresh / re-login.
+                    print("[PPE ALERT WORKER] HTTP 401 Unauthorized - token expired, will refresh.")
+                    with self._lock:
+                        self._jwt_token    = ""
+                        self._refresh_token = BACKEND_REFRESH_TOKEN  # retry with refresh
+
+                elif resp.status_code == 400:
+                    print(
+                        f"[PPE ALERT WORKER] HTTP 400 Bad Request. "
+                        f"Response: {resp.text[:400]}"
+                    )
+
+                else:
+                    print(
+                        f"[PPE ALERT WORKER] HTTP {resp.status_code} from backend. "
+                        f"Response: {resp.text[:200]}"
+                    )
+
+            except requests.exceptions.ConnectionError:
+                print("[PPE ALERT WORKER] Backend unavailable (connection refused)")
+            except requests.exceptions.Timeout:
+                print(f"[PPE ALERT WORKER] Request timeout after {BACKEND_REQUEST_TIMEOUT}s")
+            except requests.exceptions.HTTPError as exc:
+                print(f"[PPE ALERT WORKER] HTTP error: {exc}")
+            except Exception as exc:
+                print(f"[PPE ALERT WORKER] Backend request failed: {exc}")
+            finally:
+                if file_handle is not None:
+                    try:
+                        file_handle.close()
+                    except Exception:
+                        pass
+                try:
+                    self._queue.task_done()
+                except Exception:
+                    pass
+
+    # --------------------------------------------------
+    def stop(self):
+        """Signal the worker to exit and wait (up to 3 s) for it."""
+        self._stop_evt.set()
+        self._worker.join(timeout=3.0)
+        print("[PPE ALERT] Alert manager stopped.")
