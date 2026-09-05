@@ -41,7 +41,7 @@ from openpyxl import Workbook, load_workbook
 # CAMERA SETTINGS
 # =====================================================
 
-CAMERA_IP = "192.168.1.126"
+CAMERA_IP = "10.1.68.45"
 USERNAME = "admin"
 PASSWORD = "Admin@123"
 
@@ -51,7 +51,7 @@ PTZ_URL = f"http://{CAMERA_IP}/onvif/ptz_service"
 MEDIA_URL = f"http://{CAMERA_IP}/onvif/media_service"
 
 # Known RTSP stream URL (credentials already embedded).
-RTSP_URL = "rtsp://admin:Admin@123@192.168.1.126:554/unicaststream/1"
+RTSP_URL = f"rtsp://{USERNAME}:{PASSWORD}@{CAMERA_IP}:554/unicaststream/1"
 
 # =====================================================
 # PATROL SETTINGS (absolute-move sweep)
@@ -283,7 +283,7 @@ os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 # BACKEND_PASSWORD       (ask backend developer)
 # =====================================================
 
-BACKEND_BASE_URL      = "http://10.1.150.142:8000"
+BACKEND_BASE_URL      = "http://siteaense.kct.ac.in:8000"
 BACKEND_SERVER_URL    = f"{BACKEND_BASE_URL}/api/ai-alerts/"
 BACKEND_REFRESH_URL   = f"{BACKEND_BASE_URL}/api/auth/token/refresh/"  # Django SimpleJWT standard
 BACKEND_LOGIN_URL     = f"{BACKEND_BASE_URL}/api/auth/login/"           # confirm with dev
@@ -301,15 +301,15 @@ CAMERA_ID             = "camera_01"
 # expires, it falls back to BACKEND_USERNAME / BACKEND_PASSWORD.
 BACKEND_AUTH_TOKEN    = (
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
-    ".eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg3MjQwNjM2LCJpYXQiOjE3ODcy"
-    "MzcwMzYsImp0aSI6IjE0OWYxZWIyOTljYzQ1MWY4YTczODA5NzRmMmU5YzVkIiwidXNlcl"
-    "9pZCI6IjIifQ.oR0XgPoOY8qNyobWmzgI9zmwJoDUbz22MaiQTmaHYEE"
+    ".eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg4NjEzMzU3LCJpYXQiOjE3ODg2"
+    "MDk3NTcsImp0aSI6ImFhOTNlZmZlNTY5MjRmZDZiNWNjN2UyYTBjM2MyYWM2IiwidXNlcl"
+    "9pZCI6IjEifQ.0d0mckilhMD03z0Gm8eWhy9wjBR8W7Y4BuLv53xS27A"
 )
 BACKEND_REFRESH_TOKEN = (
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
-    ".eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc4NzIzODgzNiwiaWF0IjoxNzg3Mj"
-    "M3MDM2LCJqdGkiOiI2ZWQzNDE4YTI5MGY0ZTE1ODZkMThjYjFkYTA4OGY1NSIsInVzZXJfaW"
-    "QiOiIyIn0.NG8-q-7T4ljGUxMn68k0JpgnbZxVtchovrEVA0pBYEo"
+    ".eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc4ODYxMTU1NywiaWF0IjoxNzg4Nj"
+    "A5NzU3LCJqdGkiOiI3MjcxY2EzM2Y0MDM0Mzg1OWE1Y2ZiNzA5Zjk3Mzg0NCIsInVzZXJf"
+    "aWQiOiIxIn0.CcplpWwYhGoWo8q8GZRV9k_zQv939PIhmR0QVbp7cYo"
 )
 
 # Fallback login credentials (used when both tokens expire).
@@ -338,7 +338,7 @@ LOOP_POLL_INTERVAL = 0.1
 # Number of consecutive unchanged-position polls (at
 # LOOP_POLL_INTERVAL spacing) before a pan/tilt move is
 # considered stalled.
-STALL_COUNT_THRESHOLD = 30
+STALL_COUNT_THRESHOLD = 70
 
 
 # =====================================================
@@ -562,24 +562,27 @@ class PPEExcelLogger:
     def _load_or_create(self):
 
         if os.path.exists(self.path):
-            self.wb = load_workbook(self.path)
-            self.ws = self.wb.active
-            print(f"PPE log: appending to existing file '{self.path}'.")
+            try:
+                self.wb = load_workbook(self.path)
+                self.ws = self.wb.active
+                print(f"PPE log: appending to existing file '{self.path}'.")
+                return
+            except Exception as exc:
+                print(f"PPE log: existing file '{self.path}' was corrupt/invalid ({exc}). Creating fresh file.")
 
-        else:
-            self.wb = Workbook()
-            self.ws = self.wb.active
-            self.ws.title = "PPE Log"
+        self.wb = Workbook()
+        self.ws = self.wb.active
+        self.ws.title = "PPE Log"
 
-            self.ws.append(EXCEL_HEADERS)
+        self.ws.append(EXCEL_HEADERS)
 
-            for col in range(1, len(EXCEL_HEADERS) + 1):
-                self.ws.column_dimensions[
-                    self.ws.cell(row=1, column=col).column_letter
-                ].width = 16
+        for col in range(1, len(EXCEL_HEADERS) + 1):
+            self.ws.column_dimensions[
+                self.ws.cell(row=1, column=col).column_letter
+            ].width = 16
 
-            self.wb.save(self.path)
-            print(f"PPE log: created new file '{self.path}'.")
+        self.wb.save(self.path)
+        print(f"PPE log: created new file '{self.path}'.")
 
     def log(self, track_id, item_status, screenshot_path=None):
         """Appends ONE new row for this log event.
@@ -899,8 +902,8 @@ class FrameGrabber:
     def __init__(self, rtsp_url):
 
         self.rtsp_url = rtsp_url
-        self.cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self._init_ffmpeg_env()
+        self.cap = self._open_capture()
 
         if not self.cap.isOpened():
             raise RuntimeError(
@@ -912,21 +915,49 @@ class FrameGrabber:
         self.latest_frame = None
         self.running = False
         self.thread = None
+        self._last_frame_time = time.time()
+
+    def _init_ffmpeg_env(self):
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+            "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|max_delay;500000|reorder_queue_size;0"
+        )
+
+    def _open_capture(self):
+        self._init_ffmpeg_env()
+        cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        return cap
 
     def start(self):
 
         self.running = True
 
         def loop():
+            fail_count = 0
             while self.running:
                 ret, frame = self.cap.read()
-                if not ret:
-                    time.sleep(0.05)
+                now = time.time()
+                if not ret or frame is None:
+                    fail_count += 1
+                    time.sleep(0.04)
+                    if (now - self._last_frame_time) > 2.0 or fail_count > 40:
+                        print("\n[FrameGrabber] RTSP stream stalled. Reconnecting...")
+                        try:
+                            self.cap.release()
+                        except Exception:
+                            pass
+                        time.sleep(0.3)
+                        self.cap = self._open_capture()
+                        self._last_frame_time = time.time()
+                        fail_count = 0
                     continue
+
+                fail_count = 0
+                self._last_frame_time = now
                 with self.lock:
                     self.latest_frame = frame
 
-        self.thread = threading.Thread(target=loop, daemon=True)
+        self.thread = threading.Thread(target=loop, daemon=True, name="FrameGrabber")
         self.thread.start()
         return self
 
@@ -940,7 +971,11 @@ class FrameGrabber:
         self.running = False
         if self.thread:
             self.thread.join(timeout=1)
-        self.cap.release()
+        if self.cap:
+            try:
+                self.cap.release()
+            except Exception:
+                pass
 
 
 # =====================================================
@@ -957,12 +992,7 @@ class PTZController:
 
     def __init__(self):
 
-        self.session = requests.Session()
-
-        retry = Retry(total=3, backoff_factor=0.5)
-        adapter = HTTPAdapter(max_retries=retry)
-        self.session.mount("http://", adapter)
-
+        self._create_session()
         self.auth = HTTPDigestAuth(USERNAME, PASSWORD)
 
         self.pan = None
@@ -971,6 +1001,12 @@ class PTZController:
 
         self.running = False
         self.poll_thread = None
+
+    def _create_session(self):
+        self.session = requests.Session()
+        retry = Retry(total=2, backoff_factor=0.2)
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=1, pool_maxsize=2)
+        self.session.mount("http://", adapter)
 
     # =================================================
     # SOAP
@@ -991,14 +1027,15 @@ class PTZController:
                 data=soap,
                 headers={"Content-Type": "application/soap+xml"},
                 auth=self.auth,
-                timeout=10
+                timeout=2.5,
             )
         except requests.RequestException as exc:
             if not quiet:
                 print(f"ONVIF request to {url} failed: {exc}")
+            self._create_session()
             return None
 
-        if not quiet:
+        if not quiet and response is not None:
 
             if response.status_code >= 300:
                 print(
@@ -1052,7 +1089,7 @@ xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl">
         def loop():
             while self.running:
                 self.get_status()
-                time.sleep(0.2)
+                time.sleep(0.35)
 
         self.poll_thread = threading.Thread(target=loop, daemon=True)
         self.poll_thread.start()

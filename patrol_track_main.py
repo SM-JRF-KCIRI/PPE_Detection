@@ -39,6 +39,9 @@ Run this file - it imports everything it needs from ptz_shared.py
 import os
 import time
 import threading
+import subprocess
+import json
+import atexit
 
 import cv2
 from ultralytics import YOLO
@@ -766,12 +769,103 @@ def run_detection_and_tracking(rtsp_url, ptz, shared_state):
 
 
 # =====================================================
+# NGROK AUTO-TUNNEL (Fixed Static Domain)
+# =====================================================
+# Automatically starts an ngrok tunnel on FEED_SERVER_PORT so the
+# MJPEG feed is reachable from anywhere on the internet.
+# Using fixed static domain: flatfoot-coat-rosy.ngrok-free.dev
+# The dashboard / developer can hardcode this domain permanently.
+
+NGROK_DOMAIN = "flatfoot-coat-rosy.ngrok-free.dev"
+
+def start_ngrok_tunnel(port, domain=NGROK_DOMAIN):
+    """
+    Starts ngrok in the background and returns the public HTTPS URL.
+    Returns None if ngrok is not installed or fails to start.
+    """
+    try:
+        # Kill any lingering ngrok processes to avoid "session limit" conflicts
+        try:
+            subprocess.run(["pkill", "-x", "ngrok"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.5)
+        except Exception:
+            pass
+
+        cmd = ["ngrok", "http", str(port), "--log=stdout", "--log-format=json"]
+        if domain:
+            cmd.extend(["--url", domain])
+
+        # Launch ngrok as a background subprocess
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        atexit.register(lambda: proc.terminate())
+
+        # Give ngrok up to 6 seconds to establish the tunnel
+        deadline = time.time() + 6.0
+        while time.time() < deadline:
+            line = proc.stdout.readline()
+            if not line:
+                time.sleep(0.1)
+                continue
+            try:
+                entry = json.loads(line.decode("utf-8", errors="ignore"))
+                if entry.get("msg") == "started tunnel":
+                    url = entry.get("url", "")
+                    if url.startswith("https"):
+                        return url
+            except Exception:
+                pass
+
+        # Fallback: query ngrok local API for tunnel URL
+        try:
+            import urllib.request
+            with urllib.request.urlopen("http://127.0.0.1:4040/api/tunnels", timeout=3) as r:
+                tunnels = json.loads(r.read())
+                for t in tunnels.get("tunnels", []):
+                    if t.get("proto") == "https":
+                        return t["public_url"]
+        except Exception:
+            pass
+
+        # Fallback: if domain is set and process is alive, return the fixed domain URL
+        if domain and proc.poll() is None:
+            return f"https://{domain}"
+
+    except FileNotFoundError:
+        print("[NGROK] ngrok not found. Install with:")
+        print("  wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-arm64.tgz")
+        print("  tar -xzf ngrok-v3-stable-linux-arm64.tgz && sudo mv ngrok /usr/local/bin/")
+        print("  ngrok config add-authtoken YOUR_TOKEN")
+    except Exception as exc:
+        print(f"[NGROK] Failed to start tunnel: {exc}")
+
+    return None
+
+
+# =====================================================
 # MAIN
 # =====================================================
 
 def main():
 
     print(f"RTSP stream URI: {RTSP_URL}")
+
+    # ---- Auto-start ngrok tunnel for public feed access ----
+    print(f"\n[NGROK] Starting permanent public tunnel for feed server (port {FEED_SERVER_PORT})...")
+    ngrok_url = start_ngrok_tunnel(FEED_SERVER_PORT, domain=NGROK_DOMAIN)
+
+    if ngrok_url:
+        print("\n" + "=" * 65)
+        print("  PERMANENT PUBLIC FEED URLs (hardcode once in backend / dashboard):")
+        print(f"  Raw feed       : {ngrok_url}/feed")
+        print(f"  Annotated feed : {ngrok_url}/annotated_feed")
+        print("=" * 65 + "\n")
+    else:
+        print("[NGROK] No public URL — feed available on local network only.")
+        print(f"  Local feed: http://10.1.68.42:{FEED_SERVER_PORT}/annotated_feed\n")
 
     shared_state = SharedState()
     ptz = PTZController()

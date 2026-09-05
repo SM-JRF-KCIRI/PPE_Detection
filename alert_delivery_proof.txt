@@ -1,7 +1,7 @@
-Timestamp: 2026-08-21T10:40:38.047996
-Target URL: http://10.1.150.142:8000/api/ai-alerts/
+Timestamp: 2026-08-27T11:30:26.596281
+Target URL: http://10.1.150.142/api/ai-alerts/
 HTTP Status: 201
 Response Headers:
-{'Server': 'gunicorn', 'Date': 'Fri, 21 Aug 2026 05:11:18 GMT', 'Connection': 'close', 'Content-Type': 'application/json', 'Vary': 'Accept, origin', 'Allow': 'GET, POST, HEAD, OPTIONS', 'X-Frame-Options': 'DENY', 'Content-Length': '620', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'Cross-Origin-Opener-Policy': 'same-origin'}
+{'Server': 'nginx/1.31.4', 'Date': 'Thu, 27 Aug 2026 05:59:53 GMT', 'Content-Type': 'application/json', 'Content-Length': '620', 'Connection': 'keep-alive', 'Vary': 'Accept, origin', 'Allow': 'GET, POST, HEAD, OPTIONS', 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'Cross-Origin-Opener-Policy': 'same-origin'}
 Response Body:
-{"success":true,"data":{"alert_id":18,"camera_name":"CAM-OMR12-NORTH-GATE","site_name":"OMR Corridor Station 12","type":"helmet_violation","severity":"CRITICAL","timestamp":"2026-08-21T10:40:38Z","snapshot":"data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAQABAAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/9oACAEBAAA/ADf/2Q==","status":"OPEN","created_at":"2026-08-21T05:11:18.163381Z","updated_at":"2026-08-21T05:11:18.163387Z","camera":1,"site":1,"acknowledged_by":null},"message":"AIAlert created successfully"}
+{"success":true,"data":{"alert_id":52,"camera_name":"CAM-OMR12-NORTH-GATE","site_name":"OMR Corridor Station 12","type":"helmet_violation","severity":"CRITICAL","timestamp":"2026-08-27T11:30:26Z","snapshot":"data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAQABAAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/9oACAEBAAA/ADf/2Q==","status":"OPEN","created_at":"2026-08-27T05:59:53.907655Z","updated_at":"2026-08-27T05:59:53.907661Z","camera":1,"site":1,"acknowledged_by":null},"message":"AIAlert created successfully"}

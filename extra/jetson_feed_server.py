@@ -9,7 +9,7 @@ import threading
 import cv2
 from flask import Flask, Response
 
-RTSP_URL = "rtsp://admin:Admin@123@192.168.1.126:554/unicaststream/1"
+RTSP_URL = "rtsp://admin:Admin@123@10.1.68.45:554/unicaststream/1"
 HTTP_PORT = 8080
 
 app = Flask(__name__)

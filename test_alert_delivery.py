@@ -21,7 +21,7 @@ try:
         BACKEND_REQUEST_TIMEOUT,
     )
 except ImportError:
-    BACKEND_BASE_URL = "http://10.1.150.142:8000"
+    BACKEND_BASE_URL = "http://siteaense.kct.ac.in:8000"
     BACKEND_SERVER_URL = f"{BACKEND_BASE_URL}/api/ai-alerts/"
     BACKEND_LOGIN_URL = f"{BACKEND_BASE_URL}/api/auth/login/"
     BACKEND_REFRESH_URL = f"{BACKEND_BASE_URL}/api/auth/token/refresh/"
