@@ -22,9 +22,13 @@ __pycache__/
 # Runs & Outputs
 runs/
 screenshots/
+backend_alert_snapshots/
 *.log
 
 # IDE & OS specific files
 .vscode/
 .idea/
 .DS_Store
+.~lock.*
+*.docx
+

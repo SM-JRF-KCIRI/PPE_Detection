@@ -35,17 +35,18 @@ from urllib3.util.retry import Retry
 # CAMERA SETTINGS
 # =====================================================
 
-CAMERA_IP = "192.168.1.126"
+CAMERA_IP = "10.1.68.45"
 USERNAME = "admin"
 PASSWORD = "Admin@123"
 
 PROFILE_TOKEN = "profiletoken01"
 
 PTZ_URL = f"http://{CAMERA_IP}/onvif/ptz_service"
+MEDIA_URL = f"http://{CAMERA_IP}/onvif/media_service"
 
 # Known RTSP stream URL (credentials already embedded) - used only
 # for the live preview window, has nothing to do with PTZ control.
-RTSP_URL = "rtsp://admin:Admin@123@192.168.1.126:554/unicaststream/1"
+RTSP_URL = f"rtsp://{USERNAME}:{PASSWORD}@{CAMERA_IP}:554/unicaststream/1"
 
 WINDOW_NAME = "Patrol Test - Live Feed"
 
